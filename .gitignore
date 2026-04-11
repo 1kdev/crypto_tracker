@@ -1,0 +1,5 @@
+telegram.db
+.venv/
+__pycache__/
+.env
+telegram.db
