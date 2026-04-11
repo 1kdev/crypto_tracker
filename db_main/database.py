@@ -30,3 +30,4 @@ async def add_to_db(telegram_id, username):
         await db.execute("INSERT INTO users (telegram_id, username, date) VALUES (?, ?, ?)", 
                           (telegram_id, username, date))
         await db.commit()
+
