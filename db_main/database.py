@@ -15,7 +15,8 @@ async def add_to_db(telegram_id, username):
         await db.execute("""CREATE TABLE IF NOT EXISTS user_tickers(
                          id INTEGER PRIMARY KEY,
                          user_id BIGINT,
-                         user_symbol TEXT
+                         user_symbol TEXT,
+                         last_notifed_price
                          )""")
         #Проверка регистрации
         cursor = await db.execute("SELECT *FROM users WHERE telegram_id = ?", (telegram_id,)) 
