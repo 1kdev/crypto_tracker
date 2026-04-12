@@ -1,46 +1,54 @@
 # 🚀 Crypto Alert Bot
 
-Простая система уведомлений о ценах на криптовалюту в Telegram. Бот использует публичное API Binance для получения актуальных котировок в реальном времени.
+A simple Telegram bot for cryptocurrency price alerts. The bot uses the public Binance API to fetch real-time market data.
 
-### 🛠 Стек
+### 🛠 Tech Stack
+
 * Python 3.10+
-* aiogram 3.x — асинхронный фреймворк для работы с Telegram API.
-* aiosqlite — библиотека для асинхронной работы с SQLite.
-* Binance API — получение рыночных данных без необходимости авторизации.
-* Pydantic-settings & dotenv — управление конфигурацией и секретами.
+* aiogram 3.x — an asynchronous framework for working with the Telegram API
+* aiosqlite — a library for asynchronous interaction with SQLite
+* Binance API — market data retrieval without authentication
+* Pydantic-settings & dotenv — configuration and secrets management
 
-### ⚙️ Инструкция по запуску
-1. **Клонируй репозиторий:**
+### ⚙️ Setup Guide
+
+1. **Clone the repository:**
+
    ```bash
    git clone https://github.com/1kdev/crypto_tracker.git
    cd crypto_tracker
    ```
 
-2. **Настрой переменные окружения:**
-   Создай файл `.env` в корне проекта и укажи токен:
+2. **Configure environment variables:**
+   Create a `.env` file in the project root and add your token:
+
    ```env
-   BOT_TOKEN=ваш_токен_от_BotFather
+   BOT_TOKEN=your_bot_token_from_BotFather
    ```
 
-3. **Установи зависимости:**
+3. **Install dependencies:**
+
    ```bash
    pip install "aiogram<4.0" pydantic-settings python-dotenv aiosqlite
    ```
 
-4. **Запусти проект:**
+4. **Run the project:**
+
    ```bash
    python app.py
    ```
 
-### 📝 Текущий функционал (v1.0.0):
-* **Обработка новых пользователей:** Автоматическая проверка и регистрация Telegram ID в базе данных при первом запуске команды `/start`.
-* **Интерфейс:** Базовое кнопочное меню и каркас для будущих функций.
-* **Схема БД:** Созданы таблицы для хранения профилей пользователей и их персональных списков тикеров.
+### 📝 Current Features (v1.0.0):
 
-### 🚀 В планах:
-* **Добавление тикеров:** Реализация записи выбранных пользователем активов в БД через FSM.
-* **Мониторинг:** Отображение текущих цен по выбранному списку пользователя.
-* **Управление:** Функционал удаления тикеров из отслеживания.
-* **Алерты:** Настройка периодических уведомлений (раз в 1, 2, 4 часа).
+* **New user handling:** Automatically checks and registers a Telegram ID in the database when the `/start` command is used for the first time
+* **Interface:** Basic button menu and a foundation for future features
+* **Database schema:** Tables created for storing user profiles and their personal ticker lists
+
+### 🚀 Planned Features:
+
+* **Add tickers:** Save user-selected assets to the database via FSM
+* **Monitoring:** Display current prices for the user’s selected assets
+* **Management:** Ability to remove tickers from tracking
+* **Alerts:** Configurable periodic notifications (every 1, 2, or 4 hours)
 
 *Developed by 1kdev*
