@@ -1,54 +1,55 @@
 # 🚀 Crypto Alert Bot
 
-A simple Telegram bot for cryptocurrency price alerts. The bot uses the public Binance API to fetch real-time market data.
+Простой Telegram-бот для отслеживания цен на криптовалюту. Получает данные в реальном времени через публичный API биржи Binance
 
 ### 🛠 Tech Stack
 
 * Python 3.10+
-* aiogram 3.x — an asynchronous framework for working with the Telegram API
-* aiosqlite — a library for asynchronous interaction with SQLite
-* Binance API — market data retrieval without authentication
-* Pydantic-settings & dotenv — configuration and secrets management
+* aiogram 3.x — асинхронный фреймворк для ботов
+* aiosqlite — работа с базой данных SQLite
+* Binance API — актуальные курсы валют
+* Pydantic-settings & dotenv — удобное хранение настроек и токенов
 
-### ⚙️ Setup Guide
+### ⚙️ Как запустить у себя
 
-1. **Clone the repository:**
+1. **Скачай проект:**
 
    ```bash
    git clone https://github.com/1kdev/crypto_tracker.git
    cd crypto_tracker
    ```
 
-2. **Configure environment variables:**
-   Create a `.env` file in the project root and add your token:
+2. **Настрой бота:**
+   Создай файл .env в папке проекта и вставь туда токен от @BotFather:
 
    ```env
-   BOT_TOKEN=your_bot_token_from_BotFather
+   BOT_TOKEN=твой_токен_здесь
    ```
 
-3. **Install dependencies:**
+3. **Установка библиотек:**
 
    ```bash
    pip install "aiogram<4.0" pydantic-settings python-dotenv aiosqlite
    ```
 
-4. **Run the project:**
+4. **Запуск проекта:**
 
    ```bash
    python app.py
    ```
 
-### 📝 Current Features (v1.0.0):
+### ✅ Что уже работает (v1.0.0):
 
-* **New user handling:** Automatically checks and registers a Telegram ID in the database when the `/start` command is used for the first time
-* **Interface:** Basic button menu and a foundation for future features
-* **Database schema:** Tables created for storing user profiles and their personal ticker lists
+* **Команда /start:** Бот запоминает новых пользователей в базе данных проверяя на дубли.
+* **Меню:** Простая навигация по кнопкам
+* **База данных:** Уже создана структура для хранения пользователей и их списков тикеров
+* **Добавление тикеров:** Пользователь может написать название пары (например, BTC/USDT или BTCUSDT), и бот сохранит её в личный список (с проверкой на дубликаты и авто-форматированием)
 
-### 🚀 Planned Features:
 
-* **Add tickers:** Save user-selected assets to the database via FSM
-* **Monitoring:** Display current prices for the user’s selected assets
-* **Management:** Ability to remove tickers from tracking
-* **Alerts:** Configurable periodic notifications (every 1, 2, or 4 hours)
+### 🚧 В планах:
+
+* **Мониторинг** Просмотр текущих цен по сохраненному списку (вывод списка командой).
+* **Управление:** Возможность удалять тикеры из отслеживания через меню
+* **Уведомления:** Настройка периодических алертов (раз в 1, 2 или 4 часа) при изменении цены
 
 *Developed by 1kdev*
