@@ -4,7 +4,7 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext 
 from kbds import reply #модуль клавиатур
 from forms.ticker import CryptoState #модуль трека крипты
-from db_main.database import add_to_db #модуль базы данных
+from db_main.database import add_to_db, add_ticker_to_db #модуль базы данных
 
 
 #Роутер
@@ -35,13 +35,22 @@ async def ticker(message: Message, state: FSMContext):
     
 @router.message(CryptoState.ticker_choice, F.text)
 async def proccess_ticker(message: Message, state: FSMContext):
-    await state.update_data(ticker_choice = message.text)
-    data = await state.get_data()
-    added_ticker = data["ticker_choice"]
-    await message.answer(f"Тикер <b><i>{added_ticker}</i></b> добавлен успешно!",
-                         parse_mode="HTML")
-    await state.clear()
+    #Получение id юзера + тикера в чат
+    user_input = message.text
+    user_id = message.from_user.id
     
+    #Вызов фукнции БД с нормализацией и проверкой на дубли
+    success, response_message = await add_ticker_to_db(user_id, user_input)
+
+    #Ответ юзеру
+    if success:
+        #Если успешно: берем сообщение из БД
+        await message.answer(response_message, parse_mode="HTML")
+        #Очистка машины состояний, чтобы бот ждал новую команду
+        await state.clear()
+    else:
+        #Если ошибка или дубль: сообщаем юзеру
+        await message.answer(response_message)    
 
 
 #Хэндлер удаления тикеров
