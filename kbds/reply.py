@@ -7,10 +7,10 @@ from aiogram.types import (ReplyKeyboardMarkup,
 def get_main_reply_keyboard():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="💼Мои тикеры")],
+            [KeyboardButton(text="💼 Мои тикеры")],
             [
-            KeyboardButton(text="➕Добавить тикер"),
-            KeyboardButton(text="❌Удалить тикер")
+            KeyboardButton(text="➕ Добавить тикер"),
+            KeyboardButton(text="❌ Удалить тикер")
             ],
         ],
         resize_keyboard=True,

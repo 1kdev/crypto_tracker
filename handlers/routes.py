@@ -4,7 +4,7 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext 
 from kbds import reply #модуль клавиатур
 from forms.ticker import CryptoState #модуль трека крипты
-from db_main.database import add_to_db, add_ticker_to_db #модуль базы данных
+from db_main.database import add_to_db, add_ticker_to_db, get_user_ticker #модуль базы данных
 
 
 #Роутер
@@ -21,14 +21,26 @@ async def start(message: Message):
 
 #Хэндлер хелп
 @router.message(Command("mytickers"))
-@router.message(F.text.lower() == "💼мои тикеры")
-async def help(message: Message): 
-    await message.answer(f"Список <b>ваших</b> тикеров:\n\n[my_ticker_1]:\nТекущая цена: [price]\nИзменение за 24h - [price_change_perday]\n\n[my_ticker_2]\nТекущая цена: [price]\nИзменение за 24h - [price_change_perday]",
-                         parse_mode="HTML")
+@router.message(F.text.lower() == "💼 мои тикеры")
+async def show_my_tickers(message: Message):
+    user_id = int(message.from_user.id)
+    
+    #Получаем список из БД
+    tickers = await get_user_ticker(user_id)
+    
+    if not tickers:
+        #Если список пуст
+        await message.answer("У вас пока нет добавленных тикеров.\nНажмите ➕Добавить тикер, чтобы начать.") 
+    else:
+        text = "📊 <b>Ваши отслеживаемые тикеры: </b>\n\n"
+        for ticker in tickers:
+            text += f"🔹 {ticker}\n\n"
+            
+        await message.answer(text, parse_mode="HTML")
 
 #Хэндлер на выбор тикета
 @router.message(Command("addticker"))
-@router.message(F.text.lower() == "➕добавить тикер")
+@router.message(F.text.lower() == "➕ добавить тикер")
 async def ticker(message: Message, state: FSMContext):
     await message.answer("Введите название интересующего тикера")
     await state.set_state(CryptoState.ticker_choice)
@@ -55,7 +67,7 @@ async def proccess_ticker(message: Message, state: FSMContext):
 
 #Хэндлер удаления тикеров
 @router.message(Command("ticker_delete"))
-@router.message(F.text.lower() == "❌удалить тикер")
+@router.message(F.text.lower() == "❌ удалить тикер")
 async def ticker_delete(message: Message):
     await message.answer("Выберите тикер, который хотите удалить",
                   reply_markup = reply.inline_delete_keyboard())

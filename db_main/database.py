@@ -31,6 +31,7 @@ async def add_to_db(telegram_id, username):
                           (telegram_id, username, date))
         await db.commit()
 
+
 async def add_ticker_to_db(telegram_id: int, ticker_symbol: str) -> tuple[bool, str]:
     '''
     Добавляет тикер юзера.
@@ -84,6 +85,28 @@ async def add_ticker_to_db(telegram_id: int, ticker_symbol: str) -> tuple[bool, 
                 (telegram_id, final_ticker)
                 )
             await db.commit()
-            return True, f"✅Тикер {final_ticker} успешно добавлен!"
+            return True, f"✅ Тикер {final_ticker} успешно добавлен!"
         except Exception as e:
             return False, f"Ошибка базы данных: {str(e)}"
+
+async def get_user_ticker(telegram_id: int) -> list:
+    '''
+    Получает список всех тикеров для конкретного юзера
+    Возвращает список строк типа ['BTCUSDT', 'ETHUSDT']
+    При пустом списке []
+    '''
+    async with aiosqlite.connect("telegram.db") as db:
+        cursor = await db.cursor()
+        
+        #Выбираем только колонку user_symbol, где user_id совпадает
+        await cursor.execute(
+            "SELECT user_symbol FROM user_tickers WHERE user_id = ?",
+            (telegram_id,)
+        )
+        
+        #fetchall() возвращает список кортежей типа [[BTCUSDT,), (ETHUSDT,)]
+        rows = await cursor.fetchall()
+        
+        #Превращаем список кортежей в простой список строк типа [BTCUSDT, ETHUSDT]
+        #row[0] берет первый список из элментов
+        return(row[0] for row in rows)
