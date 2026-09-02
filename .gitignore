@@ -3,3 +3,4 @@ telegram.db
 __pycache__/
 .env
 telegram.db
+venv/

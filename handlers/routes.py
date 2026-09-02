@@ -1,10 +1,13 @@
 from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext 
 from kbds import reply #модуль клавиатур
 from forms.ticker import CryptoState #модуль трека крипты
-from db_main.database import add_to_db, add_ticker_to_db, get_user_ticker #модуль базы данных
+from db_main.database import (add_to_db, add_ticker_to_db, get_user_ticker,
+                               get_user_tickers_full, delete_ticker_from_db,
+                               normalize_ticker) #модуль базы данных
+from services.binance_api import get_ticker_price, get_ticker_prices #модуль биржевого API
 
 
 #Роутер
@@ -19,7 +22,7 @@ async def start(message: Message):
     await message.answer("Выберите действие из кнопочного меню", reply_markup=reply.get_main_reply_keyboard())
 
 
-#Хэндлер хелп
+#Хэндлер "Мои тикеры"
 @router.message(Command("mytickers"))
 @router.message(F.text.lower() == "💼 мои тикеры")
 async def show_my_tickers(message: Message):
@@ -31,14 +34,20 @@ async def show_my_tickers(message: Message):
     if not tickers:
         #Если список пуст
         await message.answer("У вас пока нет добавленных тикеров.\nНажмите ➕Добавить тикер, чтобы начать.") 
-    else:
-        text = "📊 <b>Ваши отслеживаемые тикеры: </b>\n\n"
-        for ticker in tickers:
-            text += f"🔹 {ticker}\n\n"
-            
-        await message.answer(text, parse_mode="HTML")
+        return
 
-#Хэндлер на выбор тикета
+    #Запрашиваем актуальные цены сразу по всем тикерам одним запросом к бирже
+    prices = await get_ticker_prices(tickers)
+
+    text = "📊 <b>Ваши отслеживаемые тикеры: </b>\n\n"
+    for ticker in tickers:
+        price = prices.get(ticker)
+        price_text = f"{price} USDT" if price is not None else "цена недоступна ⚠️"
+        text += f"🔹 <b>{ticker}</b> — {price_text}\n\n"
+
+    await message.answer(text, parse_mode="HTML")
+
+#Хэндлер на выбор тикера
 @router.message(Command("addticker"))
 @router.message(F.text.lower() == "➕ добавить тикер")
 async def ticker(message: Message, state: FSMContext):
@@ -50,14 +59,32 @@ async def proccess_ticker(message: Message, state: FSMContext):
     #Получение id юзера + тикера в чат
     user_input = message.text
     user_id = message.from_user.id
-    
+
+    #Сначала приводим строку к формату биржи (BTCUSDT), не трогая базу
+    ok, result = normalize_ticker(user_input)
+    if not ok:
+        #result содержит текст ошибки формата
+        await message.answer(result)
+        return
+
+    final_ticker = result
+
+    #Проверяем на бирже, что такая пара реально существует
+    price = await get_ticker_price(final_ticker)
+    if price is None:
+        await message.answer(
+            f"⚠️ Тикер {final_ticker} не найден на Binance.\n"
+            "Проверьте название и попробуйте снова."
+        )
+        return
+
     #Вызов фукнции БД с нормализацией и проверкой на дубли
     success, response_message = await add_ticker_to_db(user_id, user_input)
 
     #Ответ юзеру
     if success:
-        #Если успешно: берем сообщение из БД
-        await message.answer(response_message, parse_mode="HTML")
+        #Если успешно: берем сообщение из БД и дополняем текущей ценой
+        await message.answer(f"{response_message}\n💰 Текущая цена: {price} USDT", parse_mode="HTML")
         #Очистка машины состояний, чтобы бот ждал новую команду
         await state.clear()
     else:
@@ -69,8 +96,32 @@ async def proccess_ticker(message: Message, state: FSMContext):
 @router.message(Command("ticker_delete"))
 @router.message(F.text.lower() == "❌ удалить тикер")
 async def ticker_delete(message: Message):
+    user_id = message.from_user.id
+
+    #Получаем список тикеров юзера вместе с их id в БД
+    tickers = await get_user_tickers_full(user_id)
+
+    if not tickers:
+        await message.answer("У вас пока нет добавленных тикеров для удаления.")
+        return
+
     await message.answer("Выберите тикер, который хотите удалить",
-                  reply_markup = reply.inline_delete_keyboard())
+                  reply_markup = reply.inline_delete_keyboard(tickers))
+
+
+#Хэндлер обработки нажатия на инлайн-кнопку удаления
+@router.callback_query(F.data.startswith("del_ticker_"))
+async def process_ticker_deletion(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    ticker_id = int(callback.data.removeprefix("del_ticker_"))
+
+    success, response_message = await delete_ticker_from_db(user_id, ticker_id)
+
+    #Убираем клавиатуру и показываем результат прямо в том же сообщении
+    await callback.message.edit_text(response_message)
+    #Обязательно отвечаем на callback, иначе у юзера будет "часики" на кнопке
+    await callback.answer()
+
 
 #Обработчик неверной команды
 @router.message()

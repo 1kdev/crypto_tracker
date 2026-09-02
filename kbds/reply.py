@@ -18,11 +18,15 @@ def get_main_reply_keyboard():
     )
     return keyboard
 
-#Inline клавиатура 
-def inline_delete_keyboard():
+#Inline клавиатура удаления, строится из реального списка тикеров юзера
+def inline_delete_keyboard(tickers: list[tuple[int, str]]):
+    '''
+    Аргументы:
+        tickers - список кортежей (id, symbol), например [(1, 'BTCUSDT'), (2, 'ETHUSDT')],
+                  получаемый из db_main.database.get_user_tickers_full
+    '''
     inline_kb_list = [
-        [InlineKeyboardButton(text="Название тикера 1", callback_data = "del_ticker_1")],
-        [InlineKeyboardButton(text="Название тикера 2", callback_data = "del_ticker_2")],
-        [InlineKeyboardButton(text="Название тикера 3", callback_data = "del_ticker_3")],
+        [InlineKeyboardButton(text=f"❌ {symbol}", callback_data=f"del_ticker_{ticker_id}")]
+        for ticker_id, symbol in tickers
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_kb_list)
