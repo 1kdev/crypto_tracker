@@ -32,17 +32,17 @@ async def add_to_db(telegram_id, username):
         await db.commit()
 
 
-async def add_ticker_to_db(telegram_id: int, ticker_symbol: str) -> tuple[bool, str]:
+def normalize_ticker(ticker_symbol: str) -> tuple[bool, str]:
     '''
-    Добавляет тикер юзера.
-    Аргументы: 
-        telegram_id - айди юзера
-        ticker_symbol - сырая строка от юзера (например 'BTC USD') 
-    Возвращает: (Успех: bool, Сообщение: str)
+    Разбирает сырую строку от юзера (например 'BTC/USDT' или 'btcusdt')
+    и приводит её к формату биржи (например 'BTCUSDT').
+    Аргументы:
+        ticker_symbol - сырая строка от юзера
+    Возвращает: (Успех: bool, Итоговый тикер или текст ошибки: str)
     '''
     #Нормализация формата тикера в верхний регистр
     clean_ticker = ticker_symbol.upper().replace(" ", "")
-    
+
     base = ""
     quote = ""
 
@@ -62,10 +62,29 @@ async def add_ticker_to_db(telegram_id: int, ticker_symbol: str) -> tuple[bool, 
             quote = "USDT"
         else:
             return False, "Ошибка: поддерживаются пары только с USDT (например, BTCUSDT)"
-    
+
+    if not base:
+        return False, "Ошибка: не удалось распознать тикер"
+
     #формируем итоговую строку: BTCUSDT
-    final_ticker = f"{base}{quote}"
-    
+    return True, f"{base}{quote}"
+
+
+async def add_ticker_to_db(telegram_id: int, ticker_symbol: str) -> tuple[bool, str]:
+    '''
+    Добавляет тикер юзера.
+    Аргументы: 
+        telegram_id - айди юзера
+        ticker_symbol - сырая строка от юзера (например 'BTC USD') 
+    Возвращает: (Успех: bool, Сообщение: str)
+    '''
+    ok, result = normalize_ticker(ticker_symbol)
+    if not ok:
+        #result в этом случае содержит текст ошибки
+        return False, result
+
+    final_ticker = result
+
     #Проверка на дубликаты + внос в базу
     async with aiosqlite.connect("telegram.db") as db:
         cursor = await db.cursor()
@@ -104,9 +123,60 @@ async def get_user_ticker(telegram_id: int) -> list:
             (telegram_id,)
         )
         
-        #fetchall() возвращает список кортежей типа [[BTCUSDT,), (ETHUSDT,)]
+        #fetchall() возвращает список кортежей типа [(BTCUSDT,), (ETHUSDT,)]
         rows = await cursor.fetchall()
         
         #Превращаем список кортежей в простой список строк типа [BTCUSDT, ETHUSDT]
-        #row[0] берет первый список из элментов
-        return(row[0] for row in rows)
+        #row[0] берет первый элемент кортежа
+        #Важно: список должен быть материализован (не генератор!),
+        #иначе проверка "if not tickers" в хендлере всегда будет False
+        return [row[0] for row in rows]
+
+
+async def get_user_tickers_full(telegram_id: int) -> list[tuple[int, str]]:
+    '''
+    Получает список тикеров юзера вместе с их id в таблице user_tickers.
+    Нужно, чтобы построить инлайн-клавиатуру удаления с правильным callback_data.
+    Возвращает список кортежей типа [(1, 'BTCUSDT'), (2, 'ETHUSDT')]
+    '''
+    async with aiosqlite.connect("telegram.db") as db:
+        cursor = await db.cursor()
+
+        await cursor.execute(
+            "SELECT id, user_symbol FROM user_tickers WHERE user_id = ?",
+            (telegram_id,)
+        )
+
+        rows = await cursor.fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+
+async def delete_ticker_from_db(telegram_id: int, ticker_id: int) -> tuple[bool, str]:
+    '''
+    Удаляет тикер юзера по его id в таблице user_tickers.
+    Дополнительно проверяет, что тикер принадлежит именно этому юзеру,
+    чтобы один пользователь не мог удалить чужой тикер, подставив id.
+    Аргументы:
+        telegram_id - айди юзера
+        ticker_id - id записи в таблице user_tickers
+    Возвращает: (Успех: bool, Сообщение: str)
+    '''
+    async with aiosqlite.connect("telegram.db") as db:
+        cursor = await db.cursor()
+
+        await cursor.execute(
+            "SELECT user_symbol FROM user_tickers WHERE id = ? AND user_id = ?",
+            (ticker_id, telegram_id)
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False, "Тикер не найден или уже был удалён."
+
+        symbol = row[0]
+
+        await db.execute(
+            "DELETE FROM user_tickers WHERE id = ? AND user_id = ?",
+            (ticker_id, telegram_id)
+        )
+        await db.commit()
+        return True, f"🗑 Тикер {symbol} удалён из списка."
