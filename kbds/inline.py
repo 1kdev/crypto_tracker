@@ -34,6 +34,7 @@ class TickerCB(CallbackData, prefix="tk"):
         change_menu    - открыть меню выбора % изменения
         change_custom  - начать ввод своего % (запрос ввода)
         change_cancel  - отмена ввода своего %
+        add_cancel     - отмена ввода тикера при добавлении (кнопка "↩️ Отмена")
     '''
     action: str
     id: int = 0
@@ -49,14 +50,36 @@ class PercentCB(CallbackData, prefix="pct"):
     value: str  # "0.5" / "1" / ... / "off"
 
 
-def tickers_list_keyboard(tickers: list[tuple[int, str]]) -> InlineKeyboardMarkup:
-    '''tickers: список (ticker_id, symbol)'''
+class SettingsCB(CallbackData, prefix="stg"):
+    '''
+    action:
+        toggle_notifications - переключить глобальную паузу всех уведомлений
+        toggle_hourly        - переключить паузу почасовых обновлений
+        open_tickers          - перейти к списку тикеров, чтобы настроить оповещения конкретного тикера
+        reopen                - вернуться к экрану настроек (кнопка "⬅️ Назад" из списка тикеров)
+        back                  - закрыть меню настроек
+    '''
+    action: str
+
+
+def tickers_list_keyboard(
+    tickers: list[tuple[int, str]],
+    ticker_action: str = "open",
+    back_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    '''
+    tickers: список (ticker_id, symbol)
+    ticker_action: какой TickerCB.action повесить на кнопку тикера —
+        "open" (по умолчанию, полная карточка тикера с ✏️/🗑/🔔/⬅️, вход через "💼 Мои тикеры")
+        "alerts" (сразу меню оповещений конкретного тикера, вход через "⚙️ Настройки")
+    back_callback: готовый packed callback_data для кнопки "⬅️ Назад".
+        Если не передан — используется закрытие меню тикеров (поведение по умолчанию).
+    '''
     builder = InlineKeyboardBuilder()
     for ticker_id, symbol in tickers:
-        icon = _symbol_icon(symbol)
         builder.row(InlineKeyboardButton(
-            text=f"{icon} {symbol}",
-            callback_data=TickerCB(action="open", id=ticker_id).pack()
+            text=symbol,
+            callback_data=TickerCB(action=ticker_action, id=ticker_id).pack()
         ))
     builder.row(InlineKeyboardButton(
         text="➕ Добавить тикер",
@@ -64,7 +87,7 @@ def tickers_list_keyboard(tickers: list[tuple[int, str]]) -> InlineKeyboardMarku
     ))
     builder.row(InlineKeyboardButton(
         text="⬅️ Назад",
-        callback_data=TickerCB(action="close").pack()
+        callback_data=back_callback or TickerCB(action="close").pack()
     ))
     return builder.as_markup()
 
@@ -186,7 +209,42 @@ def change_custom_cancel_keyboard(ticker_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def add_ticker_cancel_keyboard() -> InlineKeyboardMarkup:
+    '''Кнопка отмены при вводе тикера на добавление (без привязки к конкретному ticker_id).'''
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text="↩️ Отмена",
+        callback_data=TickerCB(action="add_cancel").pack()
+    ))
+    return builder.as_markup()
+
+
+def settings_keyboard(notifications_enabled: bool, hourly_enabled: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    notif_label = "🔔 Все уведомления: ✅ ВКЛ" if notifications_enabled else "🔔 Все уведомления: 🔕 ВЫКЛ"
+    hourly_label = "⏰ Ежечасные обновления: ✅ ВКЛ" if hourly_enabled else "⏰ Ежечасные обновления: 🔕 ВЫКЛ"
+    builder.row(InlineKeyboardButton(
+        text=notif_label,
+        callback_data=SettingsCB(action="toggle_notifications").pack()
+    ))
+    builder.row(InlineKeyboardButton(
+        text=hourly_label,
+        callback_data=SettingsCB(action="toggle_hourly").pack()
+    ))
+    builder.row(InlineKeyboardButton(
+        text="🔧 Настроить оповещения тикера",
+        callback_data=SettingsCB(action="open_tickers").pack()
+    ))
+    builder.row(InlineKeyboardButton(
+        text="⬅️ Назад",
+        callback_data=SettingsCB(action="back").pack()
+    ))
+    return builder.as_markup()
+
+
 def _symbol_icon(symbol: str) -> str:
+    #Больше не используется в списке тикеров (по запросу убраны иконки),
+    #оставлено на случай использования в другом месте UI в будущем.
     icons = {"BTC": "₿", "ETH": "Ξ", "SOL": "◎"}
     for base, icon in icons.items():
         if symbol.startswith(base):

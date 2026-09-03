@@ -12,6 +12,8 @@ def get_main_reply_keyboard():
             KeyboardButton(text="➕ Добавить тикер"),
             KeyboardButton(text="❌ Удалить тикер")
             ],
+            [KeyboardButton(text="📊 Статистика")],
+            [KeyboardButton(text="⚙️ Настройки")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
@@ -29,4 +31,7 @@ def inline_delete_keyboard(tickers: list[tuple[int, str]]):
         [InlineKeyboardButton(text=f"❌ {symbol}", callback_data=f"del_ticker_{ticker_id}")]
         for ticker_id, symbol in tickers
     ]
+    inline_kb_list.append(
+        [InlineKeyboardButton(text="↩️ Отмена", callback_data="cancel_ticker_delete")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=inline_kb_list)

@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.filters import Command, StateFilter
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext 
-from kbds import reply #модуль клавиатур
+from kbds import reply, inline #модуль клавиатур
 from forms.ticker import CryptoState #модуль трека крипты
 from db_main.database import (add_to_db, add_ticker_to_db,
                                get_user_tickers_full, delete_ticker_from_db,
@@ -29,7 +29,20 @@ async def start(message: Message):
 @router.message(Command("addticker"))
 @router.message(F.text.lower() == "➕ добавить тикер")
 async def ticker(message: Message, state: FSMContext):
-    await message.answer("Введите название интересующего тикера")
+    await message.answer(
+        "➕ <b>Добавление тикера</b>\n\n"
+        "Введите название монеты или торговую пару.\n\n"
+        "Поддерживаемые форматы:\n"
+        "• BTC\n"
+        "• BTCUSDT\n"
+        "• BTC/USDT\n"
+        "• BTC-USDT\n"
+        "• BTCUSD\n\n"
+        "💡 Если указать только название монеты, например BTC, бот автоматически добавит USDT:\n"
+        "BTC → BTCUSDT",
+        parse_mode="HTML",
+        reply_markup=inline.add_ticker_cancel_keyboard(),
+    )
     await state.set_state(CryptoState.ticker_choice)
     
 @router.message(CryptoState.ticker_choice, F.text)
@@ -61,8 +74,15 @@ async def proccess_ticker(message: Message, state: FSMContext):
 
     #Ответ юзеру
     if success:
-        #Если успешно: берем сообщение из БД и дополняем текущей ценой
-        await message.answer(f"{response_message}\n💰 Текущая цена: {price} USDT", parse_mode="HTML")
+        #Если успешно: берем сообщение из БД и дополняем текущей ценой.
+        #Явно возвращаем reply_markup с главной клавиатурой, чтобы она гарантированно
+        #выехала снизу чата (иначе на некоторых клиентах, например iOS, остаётся
+        #открытой системная клавиатура ввода текста от предыдущего запроса).
+        await message.answer(
+            f"{response_message}\n💰 Текущая цена: {price} USDT",
+            parse_mode="HTML",
+            reply_markup=reply.get_main_reply_keyboard(),
+        )
         #Очистка машины состояний, чтобы бот ждал новую команду
         await state.clear()
     else:
@@ -99,6 +119,13 @@ async def process_ticker_deletion(callback: CallbackQuery):
     await callback.message.edit_text(response_message)
     #Обязательно отвечаем на callback, иначе у юзера будет "часики" на кнопке
     await callback.answer()
+
+
+#Хэндлер отмены удаления тикера (юзер передумал)
+@router.callback_query(F.data == "cancel_ticker_delete")
+async def cancel_ticker_deletion(callback: CallbackQuery):
+    await callback.message.edit_text("↩️ Удаление отменено.")
+    await callback.answer("Отменено")
 
 
 #Обработчик неверной команды

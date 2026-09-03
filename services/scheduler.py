@@ -27,7 +27,7 @@ from aiogram import Bot
 from db_main.database import (
     get_active_periodic_tickers, get_active_change_tickers,
     update_periodic_sent, update_baseline_price,
-    get_users_for_hourly_digest, update_hourly_sent,
+    get_users_for_hourly_digest, update_hourly_sent, update_hourly_prices,
 )
 from services.binance_api import get_ticker_prices
 
@@ -62,7 +62,33 @@ def _seconds_since(value: str | None) -> float:
 
 
 def format_price(price: float) -> str:
-    return f"{price:,.2f}".replace(",", " ")
+    #Та же логика точности, что и в handlers/ticker_menu.py: 2 знака для цен >= 1,
+    #до 6 знаков (без лишних нулей) для дешёвых монет
+    decimals = 2 if price >= 1 else 6
+    text = f"{price:,.{decimals}f}".replace(",", " ")
+    if decimals == 6:
+        text = text.rstrip("0")
+        if text.endswith("."):
+            text += "00"
+        else:
+            head, _, tail = text.partition(".")
+            if len(tail) < 2:
+                text = f"{head}.{tail.ljust(2, '0')}"
+    return text
+
+
+def format_change(current: float, previous: float | None) -> str:
+    '''
+    "📈 +0.09% | +18.00 USDT" / "📉 -1.24% | -950.00 USDT".
+    Пустая строка, если предыдущей цены ещё нет — фальшивую статистику не показываем.
+    '''
+    if not previous:
+        return ""
+    diff = current - previous
+    pct = (diff / previous) * 100
+    icon = "📈" if diff >= 0 else "📉"
+    sign = "+" if diff >= 0 else ""
+    return f"{icon} {sign}{pct:.2f}% | {sign}{format_price(diff)} USDT"
 
 
 async def _check_periodic(bot: Bot, prices: dict[str, float]):
@@ -75,13 +101,17 @@ async def _check_periodic(bot: Bot, prices: dict[str, float]):
         if price is None:
             continue
 
+        change_line = format_change(price, ticker.get("last_periodic_price"))
+        text = (
+            f"⏱ <b>Периодическое оповещение · каждые {ticker['periodic_minutes']} мин</b>\n\n"
+            f"{ticker['user_symbol']}\n{format_price(price)} USDT"
+        )
+        if change_line:
+            text += f"\n{change_line} (с прошлого оповещения)"
+
         try:
-            await bot.send_message(
-                ticker["user_id"],
-                f"⏱ <b>{ticker['user_symbol']}</b>\n\n{format_price(price)} USDT",
-                parse_mode="HTML",
-            )
-            await update_periodic_sent(ticker["id"], _now_str())
+            await bot.send_message(ticker["user_id"], text, parse_mode="HTML")
+            await update_periodic_sent(ticker["id"], _now_str(), price)
         except Exception as e:
             logger.warning(f"Не удалось отправить периодическое оповещение user={ticker['user_id']}: {e}")
 
@@ -98,20 +128,14 @@ async def _check_change_percent(bot: Bot, prices: dict[str, float]):
         if abs(change_pct) < ticker["change_percent"]:
             continue
 
-        direction = "📈" if change_pct > 0 else "📉"
-        sign = "+" if change_pct > 0 else ""
+        change_line = format_change(price, baseline)
+        text = (
+            f"🔔 <b>Оповещение по изменению цены · порог ±{ticker['change_percent']:g}%</b>\n\n"
+            f"{ticker['user_symbol']}\n{format_price(price)} USDT\n"
+            f"{change_line} (с момента предыдущего срабатывания)"
+        )
         try:
-            await bot.send_message(
-                ticker["user_id"],
-                (
-                    f"🔔 <b>{ticker['user_symbol']}</b>\n\n"
-                    f"{direction} Цена изменилась более чем на {ticker['change_percent']}%.\n\n"
-                    f"Было:\n{format_price(baseline)} USDT\n\n"
-                    f"Сейчас:\n{format_price(price)} USDT\n\n"
-                    f"Изменение:\n{sign}{change_pct:.2f}%"
-                ),
-                parse_mode="HTML",
-            )
+            await bot.send_message(ticker["user_id"], text, parse_mode="HTML")
             #Переустанавливаем baseline на текущую цену, чтобы не спамить
             #тем же самым событием каждый следующий тик
             await update_baseline_price(ticker["id"], price)
@@ -125,19 +149,29 @@ async def _check_hourly_digest(bot: Bot):
         if _seconds_since(user["last_hourly_sent"]) < user["delay_time"]:
             continue
 
-        prices = await get_ticker_prices(user["tickers"])
+        symbols = [t["symbol"] for t in user["tickers"]]
+        prices = await get_ticker_prices(symbols)
         if not prices:
             continue
 
         text = "⏰ <b>Ежечасное обновление</b>\n\n"
-        for symbol in user["tickers"]:
-            price = prices.get(symbol)
-            price_text = f"{format_price(price)} USDT" if price is not None else "цена недоступна ⚠️"
-            text += f"{symbol}\n{price_text}\n\n"
+        new_prices_by_id: dict[int, float] = {}
+        for t in user["tickers"]:
+            price = prices.get(t["symbol"])
+            if price is None:
+                text += f"{t['symbol']}\nцена недоступна ⚠️\n\n"
+                continue
+            change_line = format_change(price, t.get("last_hourly_price"))
+            text += f"{t['symbol']}\n{format_price(price)} USDT"
+            if change_line:
+                text += f"\n{change_line} (за последний час)"
+            text += "\n\n"
+            new_prices_by_id[t["id"]] = price
 
         try:
             await bot.send_message(user["telegram_id"], text.strip(), parse_mode="HTML")
             await update_hourly_sent(user["telegram_id"], _now_str())
+            await update_hourly_prices(new_prices_by_id)
         except Exception as e:
             logger.warning(f"Не удалось отправить почасовой дайджест user={user['telegram_id']}: {e}")
 

@@ -19,24 +19,52 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from forms.ticker import CryptoState
 from kbds.inline import (
-    TickerCB, PeriodicCB, PercentCB,
+    TickerCB, PeriodicCB, PercentCB, SettingsCB,
     tickers_list_keyboard, ticker_card_keyboard, edit_cancel_keyboard,
     delete_confirm_keyboard, alerts_menu_keyboard, periodic_menu_keyboard,
     change_percent_menu_keyboard, change_custom_cancel_keyboard,
+    add_ticker_cancel_keyboard, settings_keyboard,
 )
 from db_main.database import (
     get_user_tickers_full, get_ticker_owned, update_ticker_symbol,
     delete_ticker_from_db, set_periodic_notification, set_change_percent_notification,
-    normalize_ticker,
+    normalize_ticker, get_user_settings, set_notifications_enabled, set_hourly_enabled,
 )
-from services.binance_api import get_ticker_price
+from services.binance_api import get_ticker_price, get_24h_stats, get_24h_stats_batch
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
 def format_price(price: float) -> str:
-    return f"{price:,.2f}".replace(",", " ")
+    #Для цен от 1 USDT и выше двух знаков достаточно (BTC, ETH),
+    #для дешёвых монет (например мелкие альткоины) нужна большая точность
+    decimals = 2 if price >= 1 else 6
+    text = f"{price:,.{decimals}f}".replace(",", " ")
+    if decimals == 6:
+        #Обрезаем незначащие нули, но оставляем минимум 2 знака после запятой
+        text = text.rstrip("0")
+        if text.endswith("."):
+            text += "00"
+        else:
+            head, _, tail = text.partition(".")
+            if len(tail) < 2:
+                text = f"{head}.{tail.ljust(2, '0')}"
+    return text
+
+
+def format_change(current: float, previous: float | None) -> str:
+    '''
+    Строка вида "📈 +0.09% | +18.00 USDT" / "📉 -1.24% | -950.00 USDT".
+    Возвращает пустую строку, если предыдущей цены ещё нет (нельзя показывать фальшивую статистику).
+    '''
+    if not previous:
+        return ""
+    diff = current - previous
+    pct = (diff / previous) * 100
+    icon = "📈" if diff >= 0 else "📉"
+    sign = "+" if diff >= 0 else ""
+    return f"{icon} {sign}{pct:.2f}% | {sign}{format_price(diff)} USDT"
 
 
 def format_percent(value: float) -> str:
@@ -122,10 +150,41 @@ async def cb_close_menu(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(TickerCB.filter(F.action == "add"))
 async def cb_add_ticker(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "➕ Введите название тикера, который хотите отслеживать (например BTCUSDT или BTC/USDT):"
+        "➕ <b>Добавление тикера</b>\n\n"
+        "Введите название монеты или торговую пару.\n\n"
+        "Поддерживаемые форматы:\n"
+        "• BTC\n"
+        "• BTCUSDT\n"
+        "• BTC/USDT\n"
+        "• BTC-USDT\n"
+        "• BTCUSD\n\n"
+        "💡 Если указать только название монеты, например BTC, бот автоматически добавит USDT:\n"
+        "BTC → BTCUSDT",
+        parse_mode="HTML",
+        reply_markup=add_ticker_cancel_keyboard(),
     )
     await state.set_state(CryptoState.ticker_choice)
     await callback.answer()
+
+
+@router.callback_query(TickerCB.filter(F.action == "add_cancel"))
+async def cb_add_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    user_id = callback.from_user.id
+    tickers = await get_user_tickers_full(user_id)
+    text = "💼 <b>Мои тикеры</b>\n\n"
+    text += "У вас пока нет отслеживаемых тикеров." if not tickers \
+        else "Выберите тикер, чтобы посмотреть детали и оповещения."
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=tickers_list_keyboard(tickers))
+    await callback.answer("Отменено")
+
+
+def format_24h_change(change_percent: float, change_abs: float) -> str:
+    '''"📈 +0.30% | +50.00 USDT" за последние 24 часа, по данным Binance 24hr ticker.'''
+    icon = "📈" if change_percent >= 0 else "📉"
+    pct_sign = "+" if change_percent >= 0 else ""  #для отрицательных % минус уже даёт сам format-spec
+    abs_sign = "+" if change_abs >= 0 else "-"
+    return f"{icon} {pct_sign}{change_percent:.2f}% | {abs_sign}{format_price(abs(change_abs))} USDT"
 
 
 # ==================================================
@@ -138,13 +197,19 @@ async def render_ticker_card(callback: CallbackQuery, ticker_id: int):
         await callback.answer("Тикер не найден или больше вам не принадлежит.", show_alert=True)
         return
 
-    price = await get_ticker_price(ticker["user_symbol"])
-    price_text = f"{format_price(price)} USDT" if price is not None else "цена недоступна ⚠️"
+    stats = await get_24h_stats(ticker["user_symbol"])
     icon = symbol_icon(ticker["user_symbol"])
+
+    if stats is not None:
+        price_text = f"{format_price(stats['price'])} USDT"
+        change_line = f"\n{format_24h_change(stats['change_percent'], stats['change_abs'])} (24ч)"
+    else:
+        price_text = "цена недоступна ⚠️"
+        change_line = ""
 
     text = (
         f"{icon} <b>{ticker['user_symbol']}</b>\n\n"
-        f"💰 Цена: {price_text}\n\n"
+        f"💰 Цена: {price_text}{change_line}\n\n"
         f"🔔 Оповещения:\n{build_alerts_status_text(ticker)}"
     )
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=ticker_card_keyboard(ticker_id))
@@ -491,3 +556,126 @@ async def process_custom_percentage(message: Message, state: FSMContext):
     except Exception as e:
         logger.warning(f"Не удалось отредактировать меню после установки %: {e}")
         await message.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+
+# ==================================================
+# 11. Глобальные настройки (⚙️ Настройки)
+# ==================================================
+def settings_text(settings: dict) -> str:
+    notif = "✅ ВКЛ" if settings["notifications_enabled"] else "🔕 ВЫКЛ"
+    hourly = "✅ ВКЛ" if settings["hourly_enabled"] else "🔕 ВЫКЛ"
+    return (
+        "⚙️ <b>Настройки</b>\n\n"
+        f"🔔 Все уведомления: {notif}\n\n"
+        f"⏰ Ежечасные обновления: {hourly}\n\n"
+        "Выключение ставит уведомления на паузу — ваши тикеры и настройки не удаляются."
+    )
+
+
+@router.message(F.text.lower() == "⚙️ настройки")
+async def open_settings_menu(message: Message, state: FSMContext):
+    await state.clear()
+    settings = await get_user_settings(message.from_user.id)
+    await message.answer(
+        settings_text(settings),
+        parse_mode="HTML",
+        reply_markup=settings_keyboard(settings["notifications_enabled"], settings["hourly_enabled"]),
+    )
+
+
+@router.callback_query(SettingsCB.filter(F.action == "toggle_notifications"))
+async def cb_toggle_notifications(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    settings = await get_user_settings(user_id)
+    new_value = not settings["notifications_enabled"]
+    await set_notifications_enabled(user_id, new_value)
+    settings["notifications_enabled"] = new_value
+    await callback.message.edit_text(
+        settings_text(settings), parse_mode="HTML",
+        reply_markup=settings_keyboard(settings["notifications_enabled"], settings["hourly_enabled"]),
+    )
+    await callback.answer("🔔 Уведомления включены" if new_value else "🔕 Уведомления на паузе")
+
+
+@router.callback_query(SettingsCB.filter(F.action == "toggle_hourly"))
+async def cb_toggle_hourly(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    settings = await get_user_settings(user_id)
+    new_value = not settings["hourly_enabled"]
+    await set_hourly_enabled(user_id, new_value)
+    settings["hourly_enabled"] = new_value
+    await callback.message.edit_text(
+        settings_text(settings), parse_mode="HTML",
+        reply_markup=settings_keyboard(settings["notifications_enabled"], settings["hourly_enabled"]),
+    )
+    await callback.answer("⏰ Ежечасные обновления включены" if new_value else "⏰ Ежечасные обновления на паузе")
+
+
+@router.callback_query(SettingsCB.filter(F.action == "open_tickers"))
+async def cb_settings_open_tickers(callback: CallbackQuery, state: FSMContext):
+    #Переход из настроек к списку тикеров, чтобы настроить оповещения конкретного
+    #тикера. В отличие от "💼 Мои тикеры" (полная карточка тикера с ✏️/🗑),
+    #здесь выбор тикера сразу открывает меню его оповещений — без лишних кнопок.
+    await state.clear()
+    user_id = callback.from_user.id
+    tickers = await get_user_tickers_full(user_id)
+
+    text = "💼 <b>Мои тикеры</b>\n\n"
+    text += "У вас пока нет отслеживаемых тикеров. Сначала добавьте тикер." if not tickers \
+        else "Выберите тикер, чтобы настроить его оповещения."
+
+    await callback.message.edit_text(
+        text, parse_mode="HTML",
+        reply_markup=tickers_list_keyboard(
+            tickers, ticker_action="alerts", back_callback=SettingsCB(action="reopen").pack()
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(SettingsCB.filter(F.action == "reopen"))
+async def cb_settings_reopen(callback: CallbackQuery):
+    settings = await get_user_settings(callback.from_user.id)
+    await callback.message.edit_text(
+        settings_text(settings), parse_mode="HTML",
+        reply_markup=settings_keyboard(settings["notifications_enabled"], settings["hourly_enabled"]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(SettingsCB.filter(F.action == "back"))
+async def cb_settings_back(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "⚙️ Настройки закрыты. Откройте их снова через кнопку ниже.",
+    )
+    await callback.answer()
+
+
+# ==================================================
+# 12. Общая статистика по всем тикерам (📊 Статистика)
+# ==================================================
+@router.message(F.text.lower() == "📊 статистика")
+async def show_stats(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    tickers = await get_user_tickers_full(user_id)
+
+    if not tickers:
+        await message.answer("У вас пока нет добавленных тикеров. Добавьте их через «➕ Добавить тикер».")
+        return
+
+    symbols = [symbol for _, symbol in tickers]
+    stats = await get_24h_stats_batch(symbols)
+
+    lines = ["📊 <b>Статистика за 24 часа</b>\n"]
+    for _, symbol in tickers:
+        s = stats.get(symbol)
+        if s is None:
+            lines.append(f"{symbol}\nцена недоступна ⚠️\n")
+            continue
+        lines.append(
+            f"{symbol}\n{format_price(s['price'])} USDT\n"
+            f"{format_24h_change(s['change_percent'], s['change_abs'])} (24ч)\n"
+        )
+
+    await message.answer("\n".join(lines).strip(), parse_mode="HTML")

@@ -7,6 +7,13 @@ DB_PATH = "telegram.db"
 #Периодические интервалы оповещений, которые поддерживает бот (в минутах)
 ALLOWED_PERIODIC_MINUTES = (5, 15, 30, 45, 60)
 
+#Известные quote-валюты для разбора "слитных" тикеров без разделителя (BTCUSDT, BTCUSD, ...).
+#Порядок важен: сначала более длинные/специфичные суффиксы, чтобы не отрезать лишнее
+#(например USDT должен матчиться раньше USD).
+KNOWN_QUOTES = ("USDT", "BUSD", "USDC", "USD", "EUR", "TRY", "GBP", "BTC", "ETH")
+#Quote-валюта по умолчанию, которая подставляется, если юзер ввёл только имя монеты (BTC -> BTCUSDT)
+DEFAULT_QUOTE = "USDT"
+
 
 async def _migrate(db: aiosqlite.Connection):
     '''
@@ -33,9 +40,22 @@ async def _migrate(db: aiosqlite.Connection):
         "created_at": "TEXT",
         "updated_at": "TEXT",
     }
+    ticker_new_columns.update({
+        #Цена на момент последней отправки периодического (⏱ каждые N минут) оповещения —
+        #нужна, чтобы показывать изменение цены с прошлого такого уведомления
+        "last_periodic_price": "REAL",
+        #Цена на момент последней отправки почасового дайджеста для этого тикера
+        "last_hourly_price": "REAL",
+    })
     for column, col_type in ticker_new_columns.items():
         if column not in ticker_columns:
             await db.execute(f"ALTER TABLE user_tickers ADD COLUMN {column} {col_type}")
+
+    #users: глобальные переключатели уведомлений (не удаляют настройки, только пауза)
+    if "notifications_enabled" not in user_columns:
+        await db.execute("ALTER TABLE users ADD COLUMN notifications_enabled INTEGER DEFAULT 1")
+    if "hourly_enabled" not in user_columns:
+        await db.execute("ALTER TABLE users ADD COLUMN hourly_enabled INTEGER DEFAULT 1")
 
     await db.commit()
 
@@ -97,37 +117,50 @@ async def add_to_db(telegram_id, username):
 
 def normalize_ticker(ticker_symbol: str) -> tuple[bool, str]:
     '''
-    Разбирает сырую строку от юзера (например 'BTC/USDT' или 'btcusdt')
-    и приводит её к формату биржи (например 'BTCUSDT').
+    Разбирает сырую строку от юзера и приводит её к формату биржи (например 'BTCUSDT').
+    Поддерживаемые форматы ввода:
+        BTC        -> BTCUSDT (голое имя монеты, quote по умолчанию USDT)
+        BTCUSDT    -> BTCUSDT (quote указан явно и не меняется)
+        BTC/USDT   -> BTCUSDT
+        BTC-USDT   -> BTCUSDT
+        BTCUSD     -> BTCUSD  (явный quote USD сохраняется как есть)
     Аргументы:
         ticker_symbol - сырая строка от юзера
     Возвращает: (Успех: bool, Итоговый тикер или текст ошибки: str)
     '''
-    #Нормализация формата тикера в верхний регистр
+    #Нормализация формата тикера в верхний регистр, без пробелов
     clean_ticker = ticker_symbol.upper().replace(" ", "")
+
+    if not clean_ticker:
+        return False, "Ошибка: не удалось распознать тикер. Пример: BTC, BTCUSDT, BTC/USDT"
 
     base = ""
     quote = ""
 
-    #Логика разделения
-    if "/" in clean_ticker:
-        #Вариант 1: юзер ввел BTC/USDT
-        parts = clean_ticker.split("/")
-        if len(parts) == 2 and parts[1] == "USDT":
-            base = parts[0]
-            quote = "USDT"
-        else:
-            return False, "Ошибка: поддерживаются только пары с USDT (например, BTC/USDT)"
+    #Вариант 1 и 2: юзер явно указал разделитель (BTC/USDT или BTC-USDT)
+    if "/" in clean_ticker or "-" in clean_ticker:
+        sep = "/" if "/" in clean_ticker else "-"
+        parts = clean_ticker.split(sep)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            return False, "Ошибка: неверный формат. Пример: BTC/USDT или BTC-USDT"
+        base, quote = parts[0], parts[1]
     else:
-        #Вариант 2: юзер ввел BTCUSDT
-        if clean_ticker.endswith("USDT"):
-            base = clean_ticker[:-4] #Всё, что до последних 4х букв
-            quote = "USDT"
+        #Вариант 3: юзер ввёл слитно — либо BASE+QUOTE (BTCUSDT/BTCUSD), либо просто BASE (BTC)
+        matched_quote = None
+        for known in KNOWN_QUOTES:
+            if clean_ticker.endswith(known) and len(clean_ticker) > len(known):
+                matched_quote = known
+                break
+        if matched_quote:
+            base = clean_ticker[: -len(matched_quote)]
+            quote = matched_quote
         else:
-            return False, "Ошибка: поддерживаются пары только с USDT (например, BTCUSDT)"
+            #Явного quote не найдено — считаем, что ввели только имя монеты
+            base = clean_ticker
+            quote = DEFAULT_QUOTE
 
-    if not base:
-        return False, "Ошибка: не удалось распознать тикер"
+    if not base or not base.isalnum() or not quote.isalnum():
+        return False, "Ошибка: не удалось распознать тикер. Пример: BTC, BTCUSDT, BTC/USDT"
 
     #формируем итоговую строку: BTCUSDT
     return True, f"{base}{quote}"
@@ -370,14 +403,19 @@ async def set_change_percent_notification(telegram_id: int, ticker_id: int,
 
 async def get_active_periodic_tickers() -> list[dict]:
     '''
-    Все тикеры (всех юзеров), у которых включено периодическое оповещение.
+    Все тикеры (всех юзеров), у которых включено периодическое оповещение,
+    и у юзера не стоит глобальная пауза уведомлений (notifications_enabled=1).
     Используется scheduler'ом раз в тик, чтобы не гонять запрос на каждый тикер отдельно.
     '''
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            """SELECT id, user_id, user_symbol, periodic_minutes, last_periodic_sent
-               FROM user_tickers WHERE periodic_minutes IS NOT NULL"""
+            """SELECT ut.id, ut.user_id, ut.user_symbol, ut.periodic_minutes,
+                      ut.last_periodic_sent, ut.last_periodic_price
+               FROM user_tickers ut
+               JOIN users u ON u.telegram_id = ut.user_id
+               WHERE ut.periodic_minutes IS NOT NULL
+                 AND COALESCE(u.notifications_enabled, 1) = 1"""
         )
         rows = await cursor.fetchall()
         await cursor.close()
@@ -386,24 +424,28 @@ async def get_active_periodic_tickers() -> list[dict]:
 
 async def get_active_change_tickers() -> list[dict]:
     '''
-    Все тикеры (всех юзеров), у которых включено оповещение по % изменения цены.
+    Все тикеры (всех юзеров), у которых включено оповещение по % изменения цены,
+    и у юзера не стоит глобальная пауза уведомлений.
     '''
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            """SELECT id, user_id, user_symbol, change_percent, baseline_price
-               FROM user_tickers WHERE change_percent IS NOT NULL AND baseline_price IS NOT NULL"""
+            """SELECT ut.id, ut.user_id, ut.user_symbol, ut.change_percent, ut.baseline_price
+               FROM user_tickers ut
+               JOIN users u ON u.telegram_id = ut.user_id
+               WHERE ut.change_percent IS NOT NULL AND ut.baseline_price IS NOT NULL
+                 AND COALESCE(u.notifications_enabled, 1) = 1"""
         )
         rows = await cursor.fetchall()
         await cursor.close()
         return [dict(row) for row in rows]
 
 
-async def update_periodic_sent(ticker_id: int, sent_at: str):
+async def update_periodic_sent(ticker_id: int, sent_at: str, price: float | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE user_tickers SET last_periodic_sent = ? WHERE id = ?",
-            (sent_at, ticker_id)
+            "UPDATE user_tickers SET last_periodic_sent = ?, last_periodic_price = ? WHERE id = ?",
+            (sent_at, price, ticker_id)
         )
         await db.commit()
 
@@ -419,25 +461,35 @@ async def update_baseline_price(ticker_id: int, new_baseline: float):
 
 async def get_users_for_hourly_digest() -> list[dict]:
     '''
-    Все пользователи, у которых есть хотя бы один тикер и для которых пора
+    Все пользователи, у которых есть хотя бы один тикер, не стоит глобальная пауза
+    уведомлений и отдельно включены почасовые обновления, и для которых пора
     отправить почасовой дайджест (now - last_hourly_sent >= delay_time).
-    Возвращает [{telegram_id, delay_time, last_hourly_sent, tickers: [symbol, ...]}]
+    Возвращает [{telegram_id, delay_time, last_hourly_sent,
+                 tickers: [{"id": int, "symbol": str, "last_hourly_price": float|None}, ...]}]
     '''
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT telegram_id, delay_time, last_hourly_sent FROM users")
+        cursor = await db.execute(
+            """SELECT telegram_id, delay_time, last_hourly_sent
+               FROM users
+               WHERE COALESCE(notifications_enabled, 1) = 1
+                 AND COALESCE(hourly_enabled, 1) = 1"""
+        )
         users = await cursor.fetchall()
         await cursor.close()
 
         result = []
         for user in users:
             cursor = await db.execute(
-                "SELECT user_symbol FROM user_tickers WHERE user_id = ?",
+                "SELECT id, user_symbol, last_hourly_price FROM user_tickers WHERE user_id = ?",
                 (user["telegram_id"],)
             )
             ticker_rows = await cursor.fetchall()
             await cursor.close()
-            tickers = [row[0] for row in ticker_rows]
+            tickers = [
+                {"id": row["id"], "symbol": row["user_symbol"], "last_hourly_price": row["last_hourly_price"]}
+                for row in ticker_rows
+            ]
             if not tickers:
                 continue
             result.append({
@@ -454,5 +506,55 @@ async def update_hourly_sent(telegram_id: int, sent_at: str):
         await db.execute(
             "UPDATE users SET last_hourly_sent = ? WHERE telegram_id = ?",
             (sent_at, telegram_id)
+        )
+        await db.commit()
+
+
+async def update_hourly_prices(price_by_ticker_id: dict[int, float]):
+    '''Обновляет last_hourly_price сразу для нескольких тикеров после отправки дайджеста.'''
+    if not price_by_ticker_id:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            "UPDATE user_tickers SET last_hourly_price = ? WHERE id = ?",
+            [(price, ticker_id) for ticker_id, price in price_by_ticker_id.items()]
+        )
+        await db.commit()
+
+
+async def get_user_settings(telegram_id: int) -> dict:
+    '''Возвращает глобальные настройки уведомлений юзера (создаёт запись с дефолтами, если её нет).'''
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT notifications_enabled, hourly_enabled FROM users WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+        if row is None:
+            return {"notifications_enabled": True, "hourly_enabled": True}
+        return {
+            "notifications_enabled": bool(row["notifications_enabled"] if row["notifications_enabled"] is not None else 1),
+            "hourly_enabled": bool(row["hourly_enabled"] if row["hourly_enabled"] is not None else 1),
+        }
+
+
+async def set_notifications_enabled(telegram_id: int, enabled: bool):
+    '''Глобальная пауза/возобновление всех уведомлений. Ничего не удаляет — только флаг.'''
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET notifications_enabled = ? WHERE telegram_id = ?",
+            (1 if enabled else 0, telegram_id)
+        )
+        await db.commit()
+
+
+async def set_hourly_enabled(telegram_id: int, enabled: bool):
+    '''Отдельная пауза/возобновление почасовых обновлений. Ничего не удаляет — только флаг.'''
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET hourly_enabled = ? WHERE telegram_id = ?",
+            (1 if enabled else 0, telegram_id)
         )
         await db.commit()
