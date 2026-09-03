@@ -4,10 +4,10 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext 
 from kbds import reply #модуль клавиатур
 from forms.ticker import CryptoState #модуль трека крипты
-from db_main.database import (add_to_db, add_ticker_to_db, get_user_ticker,
+from db_main.database import (add_to_db, add_ticker_to_db,
                                get_user_tickers_full, delete_ticker_from_db,
                                normalize_ticker) #модуль базы данных
-from services.binance_api import get_ticker_price, get_ticker_prices #модуль биржевого API
+from services.binance_api import get_ticker_price #модуль биржевого API
 
 
 #Роутер
@@ -22,30 +22,8 @@ async def start(message: Message):
     await message.answer("Выберите действие из кнопочного меню", reply_markup=reply.get_main_reply_keyboard())
 
 
-#Хэндлер "Мои тикеры"
-@router.message(Command("mytickers"))
-@router.message(F.text.lower() == "💼 мои тикеры")
-async def show_my_tickers(message: Message):
-    user_id = int(message.from_user.id)
-    
-    #Получаем список из БД
-    tickers = await get_user_ticker(user_id)
-    
-    if not tickers:
-        #Если список пуст
-        await message.answer("У вас пока нет добавленных тикеров.\nНажмите ➕Добавить тикер, чтобы начать.") 
-        return
-
-    #Запрашиваем актуальные цены сразу по всем тикерам одним запросом к бирже
-    prices = await get_ticker_prices(tickers)
-
-    text = "📊 <b>Ваши отслеживаемые тикеры: </b>\n\n"
-    for ticker in tickers:
-        price = prices.get(ticker)
-        price_text = f"{price} USDT" if price is not None else "цена недоступна ⚠️"
-        text += f"🔹 <b>{ticker}</b> — {price_text}\n\n"
-
-    await message.answer(text, parse_mode="HTML")
+#Хэндлер "Мои тикеры" теперь реализован в handlers/ticker_menu.py (интерактивное inline-меню)
+#(команда /mytickers и текст "💼 Мои тикеры" обрабатываются там)
 
 #Хэндлер на выбор тикера
 @router.message(Command("addticker"))
