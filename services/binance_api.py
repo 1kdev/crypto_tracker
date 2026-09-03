@@ -1,10 +1,8 @@
-from typing import Optional
 import asyncio
 import json
 import logging
 
 import aiohttp
-
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +10,7 @@ BASE_URL = "https://api.binance.com/api/v3/ticker/price"
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=5)
 
 
-async def get_ticker_price(symbol: str) -> Optional[float]:
+async def get_ticker_price(symbol: str) -> float | None:
     '''
     Получает актуальную цену одного тикера с Binance.
     Используется в том числе для валидации: существует ли такая пара на бирже.
